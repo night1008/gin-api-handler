@@ -188,9 +188,9 @@ func TestI18nValidationErrorDetails(t *testing.T) {
 	for _, e := range resp.Errors {
 		if errDetail, ok := e.(map[string]interface{}); ok {
 			if message, ok := errDetail["message"].(string); ok {
-				// 验证消息包含 "Field validation failed"
-				if len(message) > 0 && !strings.HasPrefix(message, "Field") {
-					t.Errorf("期望英文错误消息以 'Field' 开头, 实际得到 '%s'", message)
+				// 验证消息以 "Field validation failed" 开头
+				if !strings.HasPrefix(message, "Field validation failed") {
+					t.Errorf("期望英文错误消息以 'Field validation failed' 开头, 实际得到 '%s'", message)
 				}
 			}
 		}
@@ -282,8 +282,79 @@ func TestI18nPathParamError(t *testing.T) {
 		t.Fatalf("解析响应失败: %v", err)
 	}
 
-	// 验证消息包含 "Path parameter binding failed"
-	if !strings.HasPrefix(resp.Message, "Path") {
-		t.Errorf("期望消息以 'Path' 开头, 实际得到 '%s'", resp.Message)
+	// 验证消息以 "Path parameter binding failed" 开头
+	if !strings.HasPrefix(resp.Message, "Path parameter binding failed") {
+		t.Errorf("期望消息以 'Path parameter binding failed' 开头, 实际得到 '%s'", resp.Message)
+	}
+}
+
+// 测试复杂的 Accept-Language 头解析
+func TestI18nComplexAcceptLanguage(t *testing.T) {
+	r := gin.New()
+
+	type testReq struct {
+		Name string `json:"name" binding:"required"`
+	}
+
+	type testResp struct {
+		Message string `json:"message"`
+	}
+
+	handleFunc := func(ctx context.Context, req *testReq) (*testResp, error) {
+		return &testResp{Message: "success"}, nil
+	}
+
+	r.POST("/test", Handler(handleFunc))
+
+	testCases := []struct {
+		name           string
+		acceptLanguage string
+		expectedMsg    string
+	}{
+		{
+			name:           "en-US with quality values",
+			acceptLanguage: "en-US,en;q=0.9,zh-CN;q=0.8",
+			expectedMsg:    "Parameter binding failed",
+		},
+		{
+			name:           "en with semicolon",
+			acceptLanguage: "en;q=0.9",
+			expectedMsg:    "Parameter binding failed",
+		},
+		{
+			name:           "zh-CN",
+			acceptLanguage: "zh-CN",
+			expectedMsg:    "参数绑定失败",
+		},
+		{
+			name:           "zh with quality",
+			acceptLanguage: "zh;q=1.0",
+			expectedMsg:    "参数绑定失败",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{}`)
+			req := httptest.NewRequest("POST", "/test", bytes.NewBuffer(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept-Language", tc.acceptLanguage)
+			w := httptest.NewRecorder()
+
+			r.ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("期望状态码 %d, 实际得到 %d", http.StatusBadRequest, w.Code)
+			}
+
+			var resp ErrorResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+
+			if resp.Message != tc.expectedMsg {
+				t.Errorf("期望消息为 '%s', 实际得到 '%s'", tc.expectedMsg, resp.Message)
+			}
+		})
 	}
 }

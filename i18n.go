@@ -3,6 +3,7 @@ package apihandler
 import (
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // MessageKey 消息键类型
@@ -95,9 +96,24 @@ var DefaultLocaleFunc = func(r *http.Request) string {
 	if locale == "" {
 		return "zh"
 	}
-	// 简单处理，只取第一个语言代码
-	if len(locale) >= 2 {
-		return locale[:2]
+	
+	// 解析 Accept-Language 头，格式如: "en-US,en;q=0.9,zh-CN;q=0.8"
+	// 取第一个语言代码（逗号或分号之前）
+	if idx := strings.IndexAny(locale, ",;"); idx > 0 {
+		locale = locale[:idx]
 	}
-	return "zh"
+	
+	// 只取语言代码部分（连字符之前），如 "en-US" -> "en"
+	if idx := strings.Index(locale, "-"); idx > 0 {
+		locale = locale[:idx]
+	}
+	
+	// 去除空格
+	locale = strings.TrimSpace(locale)
+	
+	if locale == "" {
+		return "zh"
+	}
+	
+	return locale
 }
