@@ -29,5 +29,5 @@ go.work
 # OS
 .DS_Store
 
-/example/example
-/example/i18n_demo
+/example/crud/crud
+/example/i18n/i18n
