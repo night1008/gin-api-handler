@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -188,7 +189,7 @@ func TestI18nValidationErrorDetails(t *testing.T) {
 		if errDetail, ok := e.(map[string]interface{}); ok {
 			if message, ok := errDetail["message"].(string); ok {
 				// 验证消息包含 "Field validation failed"
-				if len(message) > 0 && message[:5] != "Field" {
+				if len(message) > 0 && !strings.HasPrefix(message, "Field") {
 					t.Errorf("期望英文错误消息以 'Field' 开头, 实际得到 '%s'", message)
 				}
 			}
@@ -282,7 +283,7 @@ func TestI18nPathParamError(t *testing.T) {
 	}
 
 	// 验证消息包含 "Path parameter binding failed"
-	if resp.Message[:4] != "Path" {
+	if !strings.HasPrefix(resp.Message, "Path") {
 		t.Errorf("期望消息以 'Path' 开头, 实际得到 '%s'", resp.Message)
 	}
 }
