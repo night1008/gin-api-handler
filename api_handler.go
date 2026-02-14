@@ -114,9 +114,14 @@ func extractValidationErrors(err error) []any {
 	// 检查是否为验证错误
 	if validationErrors, ok := err.(validator.ValidationErrors); ok {
 		for _, e := range validationErrors {
+			message := fmt.Sprintf("字段验证失败: %s", e.Tag())
+			// 对于有参数的验证标签，添加参数信息
+			if e.Param() != "" {
+				message = fmt.Sprintf("字段验证失败: %s=%s", e.Tag(), e.Param())
+			}
 			details = append(details, map[string]string{
 				"field":   e.Field(),
-				"message": fmt.Sprintf("字段验证失败: %s", e.Tag()),
+				"message": message,
 			})
 		}
 	}
