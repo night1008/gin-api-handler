@@ -2,7 +2,7 @@ package apihandler
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -52,6 +52,8 @@ type HandlerConfig struct {
 	SuccessHTTPCode int
 	BindErrorCode   any
 	RequestLogger   RequestLogger // 请求日志记录函数
+	Translator      Translator    // 翻译器
+	LocaleFunc      LocaleFunc    // 语言环境函数
 }
 
 // DefaultConfig 默认配置
@@ -59,7 +61,9 @@ var DefaultConfig = &HandlerConfig{
 	SuccessCode:     0,
 	SuccessHTTPCode: http.StatusOK,
 	BindErrorCode:   http.StatusBadRequest,
-	RequestLogger:   nil, // 默认不记录
+	RequestLogger:   nil,        // 默认不记录
+	Translator:      nil,        // 默认使用中文
+	LocaleFunc:      nil,        // 默认使用 Accept-Language
 }
 
 // Option 处理器选项函数
@@ -93,6 +97,20 @@ func WithRequestLogger(logger RequestLogger) Option {
 	}
 }
 
+// WithTranslator 设置翻译器
+func WithTranslator(translator Translator) Option {
+	return func(c *HandlerConfig) {
+		c.Translator = translator
+	}
+}
+
+// WithLocaleFunc 设置语言环境函数
+func WithLocaleFunc(localeFunc LocaleFunc) Option {
+	return func(c *HandlerConfig) {
+		c.LocaleFunc = localeFunc
+	}
+}
+
 // Handler 创建 Gin 处理器
 func Handler[T any, R any](handleFunc HandleFunc[T, R], opts ...Option) gin.HandlerFunc {
 	config := &HandlerConfig{
@@ -100,6 +118,8 @@ func Handler[T any, R any](handleFunc HandleFunc[T, R], opts ...Option) gin.Hand
 		SuccessHTTPCode: DefaultConfig.SuccessHTTPCode,
 		BindErrorCode:   DefaultConfig.BindErrorCode,
 		RequestLogger:   DefaultConfig.RequestLogger,
+		Translator:      DefaultConfig.Translator,
+		LocaleFunc:      DefaultConfig.LocaleFunc,
 	}
 	for _, opt := range opts {
 		opt(config)
@@ -108,16 +128,18 @@ func Handler[T any, R any](handleFunc HandleFunc[T, R], opts ...Option) gin.Hand
 }
 
 // extractValidationErrors 从验证错误中提取详细信息
-func extractValidationErrors(err error) []any {
+func extractValidationErrors(err error, translator Translator) []any {
 	var details []any
 	
 	// 检查是否为验证错误
 	if validationErrors, ok := err.(validator.ValidationErrors); ok {
 		for _, e := range validationErrors {
-			message := fmt.Sprintf("字段验证失败: %s", e.Tag())
+			var message string
 			// 对于有参数的验证标签，添加参数信息
 			if e.Param() != "" {
-				message = fmt.Sprintf("字段验证失败: %s=%s", e.Tag(), e.Param())
+				message = translator.Translate(MsgFieldValidationFailedWithParam, e.Tag(), e.Param())
+			} else {
+				message = translator.Translate(MsgFieldValidationFailed, e.Tag())
 			}
 			details = append(details, map[string]string{
 				"field":   e.Field(),
@@ -131,36 +153,44 @@ func extractValidationErrors(err error) []any {
 
 // HandlerWithConfig 使用指定配置创建 Gin 处理器
 func HandlerWithConfig[T any, R any](handleFunc HandleFunc[T, R], config *HandlerConfig) gin.HandlerFunc {
-	return HandlerWithCode(handleFunc, config.SuccessCode, config.SuccessHTTPCode, config.BindErrorCode, config.RequestLogger)
-}
-
-// HandlerWithCode 创建 Gin 处理器，可指定成功响应的 code、HTTP 状态码和参数绑定错误的 code
-func HandlerWithCode[T any, R any](handleFunc HandleFunc[T, R], successCode any, successHTTPCode int, bindErrorCode any, requestLogger RequestLogger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 创建请求对象
 		req := new(T)
 
+		// 获取翻译器
+		translator := config.Translator
+		if translator == nil {
+			// 如果未设置翻译器，根据请求获取语言环境
+			locale := "zh"
+			if config.LocaleFunc != nil {
+				locale = config.LocaleFunc(c.Request)
+			} else if DefaultLocaleFunc != nil {
+				locale = DefaultLocaleFunc(c.Request)
+			}
+			translator = NewSimpleTranslator(locale)
+		}
+
 		// 绑定 JSON/Query 参数
 		if err := c.ShouldBind(req); err != nil {
 			// 提取验证错误详情
-			details := extractValidationErrors(err)
+			details := extractValidationErrors(err, translator)
 			if len(details) > 0 {
-				handleError(c, NewBizErrorWithDetails(bindErrorCode, "参数绑定失败", http.StatusBadRequest, details))
+				handleError(c, NewBizErrorWithDetails(config.BindErrorCode, translator.Translate(MsgBindError), http.StatusBadRequest, details))
 			} else {
-				handleError(c, NewBizError(bindErrorCode, fmt.Sprintf("参数绑定失败: %v", err), http.StatusBadRequest))
+				handleError(c, NewBizError(config.BindErrorCode, translator.Translate(MsgBindErrorDetail, err), http.StatusBadRequest))
 			}
 			return
 		}
 
 		// 绑定路径参数
-		if err := bindPathParams(c, req); err != nil {
-			handleError(c, NewBizError(bindErrorCode, fmt.Sprintf("路径参数绑定失败: %v", err), http.StatusBadRequest))
+		if err := bindPathParams(c, req, translator); err != nil {
+			handleError(c, NewBizError(config.BindErrorCode, translator.Translate(MsgPathBindError, err), http.StatusBadRequest))
 			return
 		}
 
 		// 记录请求日志（如果配置了日志函数）
-		if requestLogger != nil {
-			requestLogger(c.Request, req)
+		if config.RequestLogger != nil {
+			config.RequestLogger(c.Request, req)
 		}
 
 		// 调用业务处理函数
@@ -171,15 +201,28 @@ func HandlerWithCode[T any, R any](handleFunc HandleFunc[T, R], successCode any,
 		}
 
 		// 返回成功响应
-		c.JSON(successHTTPCode, SuccessResponse[R]{
-			Code: successCode,
+		c.JSON(config.SuccessHTTPCode, SuccessResponse[R]{
+			Code: config.SuccessCode,
 			Data: resp,
 		})
 	}
 }
 
+// HandlerWithCode 创建 Gin 处理器，可指定成功响应的 code、HTTP 状态码和参数绑定错误的 code
+func HandlerWithCode[T any, R any](handleFunc HandleFunc[T, R], successCode any, successHTTPCode int, bindErrorCode any, requestLogger RequestLogger) gin.HandlerFunc {
+	config := &HandlerConfig{
+		SuccessCode:     successCode,
+		SuccessHTTPCode: successHTTPCode,
+		BindErrorCode:   bindErrorCode,
+		RequestLogger:   requestLogger,
+		Translator:      nil,
+		LocaleFunc:      nil,
+	}
+	return HandlerWithConfig(handleFunc, config)
+}
+
 // bindPathParams 绑定路径参数
-func bindPathParams(c *gin.Context, req any) error {
+func bindPathParams(c *gin.Context, req any, translator Translator) error {
 	reqType := reflect.TypeOf(req).Elem()
 	reqValue := reflect.ValueOf(req).Elem()
 
@@ -208,17 +251,17 @@ func bindPathParams(c *gin.Context, req any) error {
 		case reflect.Int64:
 			val, err := strconv.ParseInt(paramValue, 10, 64)
 			if err != nil {
-				return fmt.Errorf("字段 %s 解析失败: %v", field.Name, err)
+				return errors.New(translator.Translate(MsgFieldParseFailed, field.Name, err))
 			}
 			fieldValue.SetInt(val)
 		case reflect.Uint64:
 			val, err := strconv.ParseUint(paramValue, 10, 64)
 			if err != nil {
-				return fmt.Errorf("字段 %s 解析失败: %v", field.Name, err)
+				return errors.New(translator.Translate(MsgFieldParseFailed, field.Name, err))
 			}
 			fieldValue.SetUint(val)
 		default:
-			return fmt.Errorf("字段 %s 的类型 %s 不支持路径绑定", field.Name, field.Type.Kind())
+			return errors.New(translator.Translate(MsgFieldTypeNotSupported, field.Name, field.Type.Kind()))
 		}
 	}
 	return nil
