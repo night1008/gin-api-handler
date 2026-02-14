@@ -30,3 +30,4 @@ go.work
 .DS_Store
 
 /example/example
+/example/i18n_demo
