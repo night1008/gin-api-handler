@@ -10,6 +10,7 @@
 - **业务错误机制**：统一的业务错误处理和 HTTP 状态码映射
 - **类型安全**：基于 Go 泛型，提供完整的类型安全
 - **灵活配置**：支持函数式选项模式，可灵活指定成功码、HTTP 状态码等参数
+- **国际化支持**：内置中英文翻译，支持自定义翻译器和语言环境函数
 
 ## 要求
 
@@ -278,6 +279,109 @@ return nil, customErr
 }
 ```
 
+## 国际化（i18n）
+
+### 默认行为
+
+默认情况下，系统自动从 HTTP 请求的 `Accept-Language` 头获取语言环境：
+
+- 支持中文（`zh`、`zh-CN` 等）和英文（`en`、`en-US` 等）
+- 默认使用中文
+- 自动翻译参数绑定、验证等系统错误消息
+
+```go
+r := gin.Default()
+r.POST("/user", handler.Handler(handleCreateUser))
+// 客户端发送 Accept-Language: en 时，错误消息会显示为英文
+// 客户端发送 Accept-Language: zh 时，错误消息会显示为中文
+```
+
+### 使用自定义翻译器
+
+可以为特定路由指定翻译器：
+
+```go
+// 强制使用英文
+englishTranslator := handler.NewSimpleTranslator("en")
+r.POST("/user", handler.Handler(handleCreateUser,
+    handler.WithTranslator(englishTranslator),
+))
+
+// 强制使用中文
+chineseTranslator := handler.NewSimpleTranslator("zh")
+r.POST("/user/zh", handler.Handler(handleCreateUser,
+    handler.WithTranslator(chineseTranslator),
+))
+```
+
+### 自定义语言环境函数
+
+可以自定义如何获取语言环境：
+
+```go
+// 从 query 参数获取语言
+customLocaleFunc := func(r *http.Request) string {
+    lang := r.URL.Query().Get("lang")
+    if lang == "" {
+        return "zh"
+    }
+    return lang
+}
+
+r.POST("/user", handler.Handler(handleCreateUser,
+    handler.WithLocaleFunc(customLocaleFunc),
+))
+
+// 从自定义 header 获取语言
+customHeaderLocaleFunc := func(r *http.Request) string {
+    lang := r.Header.Get("X-Language")
+    if lang == "" {
+        return "zh"
+    }
+    return lang
+}
+
+r.POST("/article", handler.Handler(handleCreateArticle,
+    handler.WithLocaleFunc(customHeaderLocaleFunc),
+))
+```
+
+### 支持的错误消息
+
+系统自动翻译以下错误消息：
+
+- **参数绑定失败** / Parameter binding failed
+- **路径参数绑定失败** / Path parameter binding failed
+- **字段验证失败** / Field validation failed
+- **字段解析失败** / Field parsing failed
+- **字段类型不支持路径绑定** / Field type does not support path binding
+
+### 响应示例
+
+**中文响应**（Accept-Language: zh）：
+```json
+{
+    "code": 400,
+    "message": "参数绑定失败",
+    "errors": [
+        {"field": "name", "message": "字段验证失败: required"},
+        {"field": "age", "message": "字段验证失败: min=18"}
+    ]
+}
+```
+
+**英文响应**（Accept-Language: en）：
+```json
+{
+    "code": 400,
+    "message": "Parameter binding failed",
+    "errors": [
+        {"field": "name", "message": "Field validation failed: required"},
+        {"field": "age", "message": "Field validation failed: min=18"}
+    ]
+}
+```
+
 ## 完整示例
 
 ```go
@@ -361,6 +465,30 @@ func WithBindErrorCode(code any) Option
 
 设置参数绑定错误的业务代码。
 
+#### WithTranslator
+
+```go
+func WithTranslator(translator Translator) Option
+```
+
+设置翻译器，用于国际化错误消息。
+
+#### WithLocaleFunc
+
+```go
+func WithLocaleFunc(localeFunc LocaleFunc) Option
+```
+
+设置语言环境函数，从 HTTP 请求中获取语言环境。
+
+#### WithRequestLogger
+
+```go
+func WithRequestLogger(logger RequestLogger) Option
+```
+
+设置请求日志记录函数。
+
 ### 处理器函数
 
 #### Handler
@@ -442,10 +570,47 @@ type HandlerConfig struct {
     SuccessCode     any
     SuccessHTTPCode int
     BindErrorCode   any
+    RequestLogger   RequestLogger
+    Translator      Translator
+    LocaleFunc      LocaleFunc
 }
 ```
 
 处理器配置结构。
+
+#### Translator
+
+```go
+type Translator interface {
+    Translate(key MessageKey, args ...interface{}) string
+}
+```
+
+翻译器接口，用于国际化错误消息。
+
+#### LocaleFunc
+
+```go
+type LocaleFunc func(r *http.Request) string
+```
+
+从 HTTP 请求中获取语言环境的函数类型。
+
+### 国际化函数
+
+#### NewSimpleTranslator
+
+```go
+func NewSimpleTranslator(locale string) Translator
+```
+
+创建简单翻译器。
+
+**参数：**
+- `locale` - 语言代码（"zh" 表示中文，"en" 表示英文）
+
+**返回：**
+- `Translator` - 翻译器实例
 
 ### 错误函数
 
