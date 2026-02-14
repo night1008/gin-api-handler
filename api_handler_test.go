@@ -383,3 +383,176 @@ func TestHandlerMixedParams(t *testing.T) {
 		t.Errorf("期望 Age 为 35, 实际得到 %d", resp.Data.Age)
 	}
 }
+
+// 测试绑定验证错误返回详细错误信息
+func TestBindValidationErrorWithDetails(t *testing.T) {
+	type validationRequest struct {
+		Name string `json:"name" binding:"required"`
+		Age  int    `json:"age" binding:"required,min=1,max=150"`
+	}
+
+	type validationResponse struct {
+		Message string `json:"message"`
+	}
+
+	r := gin.New()
+
+	handleFunc := func(ctx context.Context, req *validationRequest) (*validationResponse, error) {
+		return &validationResponse{Message: "success"}, nil
+	}
+
+	r.POST("/validate", Handler(handleFunc))
+
+	// 发送一个缺少 required 字段的请求
+	reqBody := map[string]interface{}{
+		// 缺少 name 和 age 字段
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest("POST", "/validate", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("期望状态码 %d, 实际得到 %d", http.StatusBadRequest, w.Code)
+	}
+
+	var resp ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	if resp.Message != "参数绑定失败" {
+		t.Errorf("期望 message 为 '参数绑定失败', 实际得到 '%s'", resp.Message)
+	}
+
+	// 验证是否包含详细错误信息
+	if resp.Errors == nil || len(resp.Errors) == 0 {
+		t.Errorf("期望包含详细错误信息，但 errors 字段为空")
+	}
+
+	// 验证错误详情包含字段信息
+	if len(resp.Errors) > 0 {
+		// 至少应该有一个错误（可能是 Name 或 Age 字段）
+		firstError, ok := resp.Errors[0].(map[string]interface{})
+		if !ok {
+			t.Errorf("期望错误详情为 map[string]interface{} 类型，实际得到 %T", resp.Errors[0])
+		} else {
+			if _, hasField := firstError["field"]; !hasField {
+				t.Errorf("期望错误详情包含 'field' 字段")
+			}
+			if _, hasMessage := firstError["message"]; !hasMessage {
+				t.Errorf("期望错误详情包含 'message' 字段")
+			}
+		}
+	}
+}
+
+// 测试绑定验证错误 - min/max 约束
+func TestBindValidationErrorMinMax(t *testing.T) {
+	type validationRequest struct {
+		Age int `json:"age" binding:"required,min=18,max=100"`
+	}
+
+	type validationResponse struct {
+		Message string `json:"message"`
+	}
+
+	r := gin.New()
+
+	handleFunc := func(ctx context.Context, req *validationRequest) (*validationResponse, error) {
+		return &validationResponse{Message: "success"}, nil
+	}
+
+	r.POST("/validate", Handler(handleFunc))
+
+	// 测试 age 小于 min 值
+	reqBody := map[string]interface{}{
+		"age": 10, // 小于 min=18
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest("POST", "/validate", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("期望状态码 %d, 实际得到 %d", http.StatusBadRequest, w.Code)
+	}
+
+	var resp ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	if resp.Message != "参数绑定失败" {
+		t.Errorf("期望 message 为 '参数绑定失败', 实际得到 '%s'", resp.Message)
+	}
+
+	// 验证包含 min 约束的错误详情
+	if resp.Errors == nil || len(resp.Errors) == 0 {
+		t.Errorf("期望包含详细错误信息，但 errors 字段为空")
+	}
+
+	// 验证错误信息包含约束参数
+	if len(resp.Errors) > 0 {
+		errorDetail, ok := resp.Errors[0].(map[string]interface{})
+		if !ok {
+			t.Fatalf("期望错误详情为 map[string]interface{} 类型")
+		}
+
+		field, ok := errorDetail["field"].(string)
+		if !ok || field != "Age" {
+			t.Errorf("期望 field 为 'Age', 实际得到 '%v'", errorDetail["field"])
+		}
+
+		message, ok := errorDetail["message"].(string)
+		if !ok {
+			t.Errorf("期望 message 为 string 类型")
+		} else {
+			// 验证消息包含参数值
+			if message != "字段验证失败: min=18" {
+				t.Errorf("期望 message 包含约束参数 'min=18', 实际得到 '%s'", message)
+			}
+		}
+	}
+
+	// 测试 age 大于 max 值
+	reqBody2 := map[string]interface{}{
+		"age": 150, // 大于 max=100
+	}
+	bodyBytes2, _ := json.Marshal(reqBody2)
+
+	req2 := httptest.NewRequest("POST", "/validate", bytes.NewReader(bodyBytes2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+
+	r.ServeHTTP(w2, req2)
+
+	var resp2 ErrorResponse
+	if err := json.Unmarshal(w2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+
+	// 验证包含 max 约束的错误详情
+	if len(resp2.Errors) > 0 {
+		errorDetail, ok := resp2.Errors[0].(map[string]interface{})
+		if !ok {
+			t.Fatalf("期望错误详情为 map[string]interface{} 类型")
+		}
+
+		message, ok := errorDetail["message"].(string)
+		if !ok {
+			t.Errorf("期望 message 为 string 类型")
+		} else {
+			// 验证消息包含参数值
+			if message != "字段验证失败: max=100" {
+				t.Errorf("期望 message 包含约束参数 'max=100', 实际得到 '%s'", message)
+			}
+		}
+	}
+}

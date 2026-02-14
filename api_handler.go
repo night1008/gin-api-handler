@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 )
 
 const (
@@ -106,6 +107,28 @@ func Handler[T any, R any](handleFunc HandleFunc[T, R], opts ...Option) gin.Hand
 	return HandlerWithConfig(handleFunc, config)
 }
 
+// extractValidationErrors 从验证错误中提取详细信息
+func extractValidationErrors(err error) []any {
+	var details []any
+	
+	// 检查是否为验证错误
+	if validationErrors, ok := err.(validator.ValidationErrors); ok {
+		for _, e := range validationErrors {
+			message := fmt.Sprintf("字段验证失败: %s", e.Tag())
+			// 对于有参数的验证标签，添加参数信息
+			if e.Param() != "" {
+				message = fmt.Sprintf("字段验证失败: %s=%s", e.Tag(), e.Param())
+			}
+			details = append(details, map[string]string{
+				"field":   e.Field(),
+				"message": message,
+			})
+		}
+	}
+	
+	return details
+}
+
 // HandlerWithConfig 使用指定配置创建 Gin 处理器
 func HandlerWithConfig[T any, R any](handleFunc HandleFunc[T, R], config *HandlerConfig) gin.HandlerFunc {
 	return HandlerWithCode(handleFunc, config.SuccessCode, config.SuccessHTTPCode, config.BindErrorCode, config.RequestLogger)
@@ -119,7 +142,13 @@ func HandlerWithCode[T any, R any](handleFunc HandleFunc[T, R], successCode any,
 
 		// 绑定 JSON/Query 参数
 		if err := c.ShouldBind(req); err != nil {
-			handleError(c, NewBizError(bindErrorCode, fmt.Sprintf("参数绑定失败: %v", err), http.StatusBadRequest))
+			// 提取验证错误详情
+			details := extractValidationErrors(err)
+			if len(details) > 0 {
+				handleError(c, NewBizErrorWithDetails(bindErrorCode, "参数绑定失败", http.StatusBadRequest, details))
+			} else {
+				handleError(c, NewBizError(bindErrorCode, fmt.Sprintf("参数绑定失败: %v", err), http.StatusBadRequest))
+			}
 			return
 		}
 
