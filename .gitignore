@@ -32,3 +32,4 @@ go.work
 /example/crud/crud
 /example/i18n/i18n
 /example/swagger/swagger
+/example/swagger/docs/
